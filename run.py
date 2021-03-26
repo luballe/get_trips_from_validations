@@ -5,8 +5,8 @@ import numpy as np
 
 # Construct a BigQuery client object.
 client = bigquery.Client()
-start_date='2020-12-05'
-end_date='2020-12-05'
+start_date='2020-01-01'
+end_date='2020-12-31'
 
 # Construct the query
 query = """
