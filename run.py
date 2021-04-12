@@ -281,7 +281,7 @@ if __name__ == '__main__':
     
     print("Processing batches of cards...")
     arr_len = len(card_num_array)
-    arr_len = 2
+    #arr_len = 2
     last_trip_id = 0
     for i in range(arr_len):
         
