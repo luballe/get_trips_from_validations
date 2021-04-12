@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 import multiprocessing
 
+
 @njit(nogil=True,fastmath=True)
 def calc_viajes(df_arr,job_num,sub_index_arr,last_trip_id):
     #print(job_num)
@@ -222,6 +223,7 @@ def process_query(df,query_index,num_processors,last_trip_id):
     
     return last_trip_id
 
+
 if __name__ == '__main__':
     #num_processors=multiprocessing.cpu_count()
     num_processors=1
@@ -258,6 +260,7 @@ if __name__ == '__main__':
     #Let's create and array of card numbers. Each row 
     #contains a range of card number which count of validation is about 10M 
 
+    print("Distributing load in bathes of 10M records..")
     #index_array = []
     card_num_array = []
     ini=0
@@ -278,14 +281,15 @@ if __name__ == '__main__':
     #card_num_array = np.vstack(index_array)
     #print(card_num_array)
     #print(len(card_num_array))
+    print("Load distributed!")
     
     print("Processing batches of cards...")
     arr_len = len(card_num_array)
     #arr_len = 2
     last_trip_id = 0
     for i in range(arr_len):
-        
-        print("Card Range: ",card_num_array[i][0],card_num_array[i][1])
+        print("*** Batch "+str(i+1)+" of "+str(arr_len)+" ***")
+        print("Getting cards info. Card's range: ",card_num_array[i][0],card_num_array[i][1])
         # Construct the query
         query = """
         SELECT 
@@ -317,6 +321,6 @@ if __name__ == '__main__':
                     "Fecha":"datetime64",
                     "Epoch":"int64"})
         df["Fecha"]=df["Fecha"].dt.strftime("%Y-%m-%d %H:%M:%S")
-        #print(df)
+        print("Info received! Starting processing...")
         last_trip_id = process_query(df,i,num_processors,last_trip_id)
     print("All Done!")
