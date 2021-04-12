@@ -1,5 +1,6 @@
 from google.cloud import bigquery
 from numba import jit, njit, types, vectorize, prange
+import os
 import gc
 import time
 import math
@@ -19,7 +20,7 @@ def calc_viajes(df_arr,job_num,sub_index_arr,last_trip_id):
 #     print(num_elems)
     indexes       = np.zeros(num_elems,dtype=np.int64)
     ordenes_viaje = np.zeros(num_elems,dtype=np.int32)
-    ids_viaje     = np.zeros(num_elems,dtype=np.int32)
+    ids_viaje     = np.zeros(num_elems,dtype=np.int64)
 
 #     print(len(indexes))
     i=0
@@ -191,26 +192,40 @@ def process_query(df,query_index,num_processors,last_trip_id):
     df.to_csv(filename,index=False,header=False)
     print("File "+filename+" saved!")
   
+    
     #print(df)
     # Do the grouping and aggregations
+#     df = df.groupby(["Viaje_id"])["Valor"].sum()
     df = df.groupby(
        ['Viaje_id']
     ).agg(
         {
-             'Valor':sum,    # Sum duration per group
+            'Valor':sum,    # Sum duration per group
         }
     )
-    print(df)
+    df = df.astype({'Valor': 'int32'})
+    #print(df)
     filename="resumen_viajes_"+str('{:02d}'.format(query_index))+".csv".zfill(3)
     print("Saving file "+filename+"...")
     df.to_csv(filename,index=True,header=False)
     print("File "+filename+" saved!")
+
+    # Consolidate results
+    print("Consolidating results...")
+    os.popen('cat detalles_viajes_'+str('{:02d}'.format(query_index))+'.csv >> detalles.csv')
+    os.popen('rm detalles_viajes_'+str('{:02d}'.format(query_index))+'.csv')
+
+    os.popen('cat resumen_viajes_'+str('{:02d}'.format(query_index))+'.csv >> resumen.csv')
+    os.popen('rm resumen_viajes_'+str('{:02d}'.format(query_index))+'.csv')
+    print("Results consolidated!")
+    
     
     return last_trip_id
 
 if __name__ == '__main__':
-    num_processors=multiprocessing.cpu_count()
-    print('Num Processors: ',num_processors)
+    #num_processors=multiprocessing.cpu_count()
+    num_processors=1
+    #print('Num Processors: ',num_processors)
     # Construct a BigQuery client object.
     client = bigquery.Client()
     print("Getting trips of cards ...")
@@ -266,7 +281,7 @@ if __name__ == '__main__':
     
     print("Processing batches of cards...")
     arr_len = len(card_num_array)
-    arr_len = 1
+    arr_len = 2
     last_trip_id = 0
     for i in range(arr_len):
         
