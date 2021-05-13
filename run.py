@@ -1,17 +1,18 @@
 from google.cloud import bigquery
 from numba import jit, njit, types, vectorize, prange
+from multiprocessing import Lock, Process, Queue, current_process
 import os
 import gc
 import time
 import math
+import queue
 import array as arr
 import pandas as pd
 import numpy as np
-import multiprocessing
-
+import datetime as dt
 
 @njit(nogil=True,fastmath=True)
-def calc_viajes(df_arr,job_num,sub_index_arr,last_trip_id):
+def calc_viajes(df_arr,job_num,sub_index_arr,last_trip_id,ini_epoch,end_epoch,minutes_trip):
     #print(job_num)
     #print(sub_index_arr)
     start_index=sub_index_arr[job_num][0]
@@ -24,15 +25,16 @@ def calc_viajes(df_arr,job_num,sub_index_arr,last_trip_id):
     ids_viaje     = np.zeros(num_elems,dtype=np.int64)
 
 #     print(len(indexes))
-    i=0
-    global_index=start_index
-    #for i, global_index in zip(range(0, num_elems), range(start_index, end_index)):
-    orden_viaje = 1
-    id_viaje    = last_trip_id
     if(num_elems>0):
 #         print('-')
 #         print(global_index)
 #         print(end_index)
+        i=0
+        global_index=start_index
+        #for i, global_index in zip(range(0, num_elems), range(start_index, end_index)):
+        orden_viaje = 1
+        id_viaje    = last_trip_id
+        elapsed_time = 0 
         while global_index<end_index:
             indexes[i] = global_index
             NumeroTarjeta_1 = df_arr[global_index][0]
@@ -43,40 +45,31 @@ def calc_viajes(df_arr,job_num,sub_index_arr,last_trip_id):
             if NumeroTarjeta_1 != NumeroTarjeta_2 :
                 id_viaje = id_viaje + 1
                 orden_viaje = 1
-
+                elapsed_time = 0
             else:
                 mins = (Epoch_2-Epoch_1)/60
-                # 2019: (epoch > 1546300799 and epoch <= 1577836799)
-                if (Epoch_2>1546300799 and Epoch_2<=1577836799):
-                    if mins>95:
-                        id_viaje = id_viaje + 1
-                        orden_viaje = 1
-                    else:
-                        orden_viaje = orden_viaje + 1
-                # 2020: (epoch > 1577836799 and epoch <= 1609459199)                    
-                elif (Epoch_2>1577836799 and Epoch_2<=1609459199):
-                    if mins>110:
-                        id_viaje = id_viaje + 1
-                        orden_viaje = 1
-                    else:
-                        orden_viaje = orden_viaje + 1
+                elapsed_time = elapsed_time + mins
+                #if (Epoch_2>ini_epoch and Epoch_2<=end_epoch):
+                if elapsed_time<=minutes_trip:
+                    orden_viaje = orden_viaje + 1
                 else:
-                    if mins>90:
-                        id_viaje = id_viaje + 1
-                        orden_viaje = 1
-                    else:
-                        orden_viaje = orden_viaje + 1
+                    id_viaje = id_viaje + 1
+                    orden_viaje = 1
+                    elapsed_time = 0
 
             ordenes_viaje[i] = orden_viaje
             ids_viaje[i] = id_viaje
+            #elapsed_times[i] = elapsed_time
+            #filter_valid[i] = valid
             i = i+1
             global_index = global_index+1
     #print(indexes)
         
-    return indexes, ordenes_viaje, ids_viaje
+    #return indexes, ids_viaje, ordenes_viaje, elapsed_times
+    return indexes, ids_viaje, ordenes_viaje
 
 @njit(nogil=True,fastmath=True)
-def calc_viajes_wrapper(num_proc,df_arr,last_trip_id):
+def calc_viajes_wrapper(num_proc,df_arr,last_trip_id,ini_epoch,end_epoch,minutes_trip):
     num_processors = num_proc
     #print("num_processors:",num_processors)
     num_positions=len(df_arr)
@@ -86,6 +79,8 @@ def calc_viajes_wrapper(num_proc,df_arr,last_trip_id):
         #print(block_size)
 
         sub_index_arr= np.zeros((num_processors,2),dtype=np.int32)
+        #result_arr= np.zeros((num_positions,3),dtype=np.int32)
+        # No elapsed times
         result_arr= np.zeros((num_positions,2),dtype=np.int32)
 
         start_index = 0
@@ -126,17 +121,28 @@ def calc_viajes_wrapper(num_proc,df_arr,last_trip_id):
     #print(block_size)
     
     for job_num in range(num_processors):
-        index_arr_res,ordenes_viajes_arr_res,ids_viajes_arr_res = calc_viajes(df_arr,job_num,sub_index_arr,last_trip_id)
+        #index_arr_res,ids_viajes_arr_res,ordenes_viajes_arr_res,elapsed_times_arr_res = calc_viajes(df_arr,job_num,sub_index_arr,last_trip_id)
+        index_arr_res,ids_viajes_arr_res,ordenes_viajes_arr_res = calc_viajes(df_arr,job_num,sub_index_arr,last_trip_id,ini_epoch,end_epoch,minutes_trip)
         #print(len(index_arr_res))
         for i in range(len(index_arr_res)):
             #result_arr[index_arr_res[i]][0]=index_arr_res[i]
-            result_arr[index_arr_res[i]][0]=ordenes_viajes_arr_res[i]
-            result_arr[index_arr_res[i]][1]=ids_viajes_arr_res[i]
+            result_arr[index_arr_res[i]][0]=ids_viajes_arr_res[i]
+            result_arr[index_arr_res[i]][1]=ordenes_viajes_arr_res[i]
+            #result_arr[index_arr_res[i]][2]=elapsed_times_arr_res[i]
+            #result_arr[index_arr_res[i]][3]=filter_valid_arr_res[i]
+            
 
     return result_arr
 
-def process_query(df,query_index,num_processors,last_trip_id):
+def process_query(df,query_index,num_processors,last_trip_id,date_info):
 
+    ini_date=date_info[0]
+    end_date=date_info[1]
+    month=date_info[2]
+    ini_epoch=date_info[3]
+    end_epoch=date_info[4]
+    minutes_trip=date_info[5]
+    max_validations=date_info[6]
     #print(df)
     # Create a copy of the dataframe, shift it one position down and paste it at the right of the original
     df_copy = df[['NumeroTarjeta','Epoch']].copy()
@@ -159,6 +165,7 @@ def process_query(df,query_index,num_processors,last_trip_id):
     df_arr = df_to_process.to_numpy(dtype=np.int64)
     del df_to_process
     #print(df_arr)
+    
 
     # compile calc_viajes
     # array of two positions
@@ -166,109 +173,224 @@ def process_query(df,query_index,num_processors,last_trip_id):
     #print('df_arr:')
     #print(df_arr)
     print('Compiling calc_viajes')
-    _ = calc_viajes(df_arr,0,a,0)
+    _ = calc_viajes(df_arr,0,a,0,0,0,0)
     print('calc_viajes Compiled!')
     
     start_time = time.time()
-    #print('Calculating orders and ids...')
+    print("Getting details (trip_IDs and trip_orders)...")
     # calculate orders and ids
-    orders_ids_viajes=pd.DataFrame(calc_viajes_wrapper(num_processors,df_arr,last_trip_id),columns=['Orden_viaje','Viaje_id'])
+    #orders_ids_viajes=pd.DataFrame(calc_viajes_wrapper(num_processors,df_arr,last_trip_id),columns=['Viaje_id','Orden_viaje','elapsed_time'])
+    # No elpased times
+    orders_ids_viajes=pd.DataFrame(calc_viajes_wrapper(num_processors,df_arr,last_trip_id,ini_epoch,end_epoch,minutes_trip),columns=['Viaje_id','Orden_viaje'])
+    #print(orders_ids_viajes)
     del(df_arr)
     gc.collect()
 
     last_trip_id = orders_ids_viajes.iloc[-1]["Viaje_id"]
-    print("Last Id:",last_trip_id)
+    #print("Last Id:",last_trip_id)
 
     print('Orders trips and its ids calculated! --- %s seconds ---' % (time.time() - start_time))
     
     df = pd.concat([df,orders_ids_viajes], axis=1)
+
     #print(df)
-    #df.drop(['NumeroTarjeta_1','TipoTarjeta_1', 'Valor_1','Fecha_1'], axis=1, inplace=True)
+
     df.drop(['Epoch'], axis=1, inplace=True)
-    #df.columns = ['NumeroTarjeta','TipoTarjeta','Valor','Fecha','Orden_viaje','Viaje_id']
     
     query_index=query_index+1
-    filename="detalles_viajes_"+str('{:02d}'.format(query_index))+".csv".zfill(3)
+    filename="detalles_"+str(month)+"_"+str('{:02d}'.format(query_index))+".csv".zfill(3)
     print("Saving file "+filename+"...")
-    df.to_csv(filename,index=False,header=False)
+    df.to_csv(filename,index=False)
     print("File "+filename+" saved!")
-  
     
-    #print(df)
-    # Do the grouping and aggregations
-#     df = df.groupby(["Viaje_id"])["Valor"].sum()
-    df = df.groupby(
-       ['Viaje_id']
-    ).agg(
-        {
-            'Valor':sum,    # Sum duration per group
-        }
-    )
-    df = df.astype({'Valor': 'int32'})
-    #print(df)
-    filename="resumen_viajes_"+str('{:02d}'.format(query_index))+".csv".zfill(3)
+#     # Consolidating details
+#     print("Consolidating details...")
+#     os.popen("cat "+filename+" >> detalles_"+str(month)+".csv")
+#     os.popen("rm "+filename)
+#     print("Details consolidated!")
+    
+    print("Getting viajes...")
+    # Group by - por tarjeta, fecha y viaje (agrupa a nivel de viaje). Deja el último de tarjeta que aparezca en el viaje
+    df = df.groupby(['NumeroTarjeta','mes','dia','Viaje_id']).agg(
+            tipo_tarjeta=pd.NamedAgg(column='TipoTarjeta', aggfunc='last'),
+            valor=pd.NamedAgg(column='Valor', aggfunc=np.nansum),
+            validaciones = pd.NamedAgg(column='NumeroTarjeta', aggfunc='size')).reset_index()
+    
+    filename="viajes_"+str(month)+"_"+str('{:02d}'.format(query_index))+".csv".zfill(3)
     print("Saving file "+filename+"...")
-    df.to_csv(filename,index=True,header=False)
+    df.to_csv(filename,index=False)
     print("File "+filename+" saved!")
 
-    # Consolidate results
-    print("Consolidating results...")
-    os.popen('cat detalles_viajes_'+str('{:02d}'.format(query_index))+'.csv >> detalles.csv')
-    os.popen('rm detalles_viajes_'+str('{:02d}'.format(query_index))+'.csv')
-
-    os.popen('cat resumen_viajes_'+str('{:02d}'.format(query_index))+'.csv >> resumen.csv')
-    os.popen('rm resumen_viajes_'+str('{:02d}'.format(query_index))+'.csv')
-    print("Results consolidated!")
+#     # Consolidating viajes
+#     print("Consolidating viajes...")
+#     os.popen("cat "+filename+" >> viajes_"+str(month)+".csv")
+#     os.popen("rm "+filename)
+#     print("Viajes consolidated!")
     
+    print("Getting info_tarjeta_dia...")
+    #pd.to_datetime(df["Fecha"]).dt.to_period('D')
+    #df = df.loc[((df['validaciones'] <= 3) & (df['mes'] == '2019-09')) | ((df['validaciones'] <= 3) & (df['mes'] == '2020-02')) | ((df['validaciones'] <= 4) & (df['mes'] == '2020-10'))]
+    df = df.loc[( (df['validaciones'] <= max_validations) & (df['mes'] == str(month)) )]
+    
+    df = df.groupby(['NumeroTarjeta','mes','dia']).agg(
+        tipo_tarjeta=pd.NamedAgg(column='tipo_tarjeta', aggfunc='last'),
+        valor_dia=pd.NamedAgg(column='valor', aggfunc=np.nansum),
+        viajes_dia = pd.NamedAgg(column='Viaje_id', aggfunc='size'),
+        validaciones_dia = pd.NamedAgg(column='validaciones', aggfunc=np.nansum)).reset_index()
+    
+    filename="info_tarjeta_dia_"+str(month)+"_"+str('{:02d}'.format(query_index))+".csv".zfill(3)
+    print("Saving file "+filename+"...")
+    df.to_csv(filename,index=False)
+    print("File "+filename+" saved!")
+
+#     # Consolidating info_tarjeta_dia
+#     print("Consolidating info_tarjeta_dia...")
+#     os.popen("cat "+filename+" >> info_tarjeta_dia_"+str(month)+".csv")
+#     os.popen("rm "+filename)
+#     print("info_tarjeta_dia consolidated!")
+    
+    print("Getting info_tarjeta_mes...")
+    df = df.groupby(['NumeroTarjeta','mes']).agg(
+        tipo_tarjeta = pd.NamedAgg(column='tipo_tarjeta', aggfunc='last'),
+        valor_mes = pd.NamedAgg(column='valor_dia', aggfunc=np.nansum),
+        viajes_mes = pd.NamedAgg(column='viajes_dia', aggfunc=np.nansum),
+        validaciones_mes = pd.NamedAgg(column='validaciones_dia', aggfunc=np.nansum),
+        p_valor_dia = pd.NamedAgg(column='valor_dia', aggfunc=np.nanmean),
+        valor_dia_min = pd.NamedAgg(column='valor_dia', aggfunc='min'),
+        valor_dia_max = pd.NamedAgg(column='valor_dia', aggfunc='max'),
+        p_viajes_dia = pd.NamedAgg(column='viajes_dia', aggfunc=np.nanmean),
+        viajes_dia_min = pd.NamedAgg(column='viajes_dia', aggfunc='min'),
+        viajes_dia_max = pd.NamedAgg(column='viajes_dia', aggfunc='max'),
+        p_valida_dia = pd.NamedAgg(column='validaciones_dia', aggfunc=np.nanmean),
+        valida_dia_min = pd.NamedAgg(column='validaciones_dia', aggfunc='min'),
+        valida_dia_max = pd.NamedAgg(column='validaciones_dia', aggfunc='max')).reset_index()
+
+    filename="info_tarjeta_mes_"+str(month)+"_"+str('{:02d}'.format(query_index))+".csv".zfill(3)
+    print("Saving file "+filename+"...")
+    df.to_csv(filename,index=False)
+    print("File "+filename+" saved!")
+
+#     # Consolidating info_tarjeta_mes_
+#     print("Consolidating info_tarjeta_mes_...")
+#     os.popen("cat "+filename+" >> info_tarjeta_mes_"+str(month)+".csv")
+#     os.popen("rm "+filename)
+#     print("info_tarjeta_mes consolidated!")
     
     return last_trip_id
 
 
-if __name__ == '__main__':
-    #num_processors=multiprocessing.cpu_count()
-    num_processors=1
-    #print('Num Processors: ',num_processors)
-    # Construct a BigQuery client object.
+def process_card_batch(i,ini_card,end_card,date_info):
+    print("Getting cards info. Card's range: "+str(ini_card)+"-"+str(end_card))
+    # Construct the query
+    ini_date=date_info[0]
+    end_date=date_info[1]
+    month=date_info[2]
+
+    query = """
+    SELECT 
+        A.Numero_Tarjeta as NumeroTarjeta,
+        SUBSTR(Nombre_Perfil , 2, 3) as TipoTarjeta, 
+        A.Valor as Valor,
+        Fecha_Transaccion as Fecha,
+        UNIX_SECONDS(A.Fecha_Transaccion) as Epoch
+    FROM `transmilenio-dwh-shvpc.validaciones.validacion` A 
+    WHERE 
+        Fecha_Clearing between '"""+ini_date+"""' and '"""+end_date+"""' and 
+        (
+            cast(A.Numero_Tarjeta as int64) >= """ + str(ini_card) + """ and 
+            cast(A.Numero_Tarjeta as int64) < """ + str(end_card) + """
+        )
+    ORDER BY NumeroTarjeta, Fecha
+    """
+    #print(query)
+    # Create a instance of bigquery 
     client = bigquery.Client()
-    print("Getting trips of cards ...")
-    dates=[
-        ['2019-09-01','2019-09-30'],
-        ['2020-02-01','2020-02-29'],
-        ['2020-10-01','2020-10-31'],
-          ]
+    # API request
+    df = client.query(query).to_dataframe(
+        dtypes={"NumeroTarjeta": "int64",
+                "TipoTarjeta": "int8",
+                "Valor":"int16",
+                "Fecha":"datetime64",
+                "Epoch":"int64"})
+    df["Fecha"]=df["Fecha"].dt.strftime("%Y-%m-%d %H:%M:%S")
+    #print(df.dtypes)
+
+    #print(df)
+    print("Info received!")
+    # Extracción del mes y el día (para conservarlos después)
+    #df['mes'] = pd.to_datetime(df["Fecha"]).dt.to_period('M')
+    print("Adding month and day to dataframe...")
+    df['mes'] = month
+    df['dia'] = pd.to_datetime(df["Fecha"]).dt.to_period('D')
+    
+    last_trip_id = 0
+    print("Starting process batch of cards...")
+    last_trip_id = process_query(df,i,1,last_trip_id,date_info)
+    
+    def do_job(tasks_to_accomplish, tasks_that_are_done):
+    while True:
+        try:
+            #try to get task from the queue. get_nowait() function will 
+            #raise queue.Empty exception if the queue is empty. 
+            #queue(False) function would do the same task also.
+            task = tasks_to_accomplish.get_nowait()
+            
+        except queue.Empty:
+
+            break
+        else:
+            #if no exception has been raised, add the task completion 
+            #message to task_that_are_done queue
+            #print(task)
+            i=task[0]
+            id_batch = i + 1
+            num_batches = task[1]
+            ini_card = task[2]
+            end_card = task[3]
+            date_info = task[4]
+            
+            print(current_process().name+" Processing batch "+str(id_batch)+" of "+str(num_batches)+ "\n")
+            # Call the function that gets details, viajes, dia and mes
+            process_card_batch(task[0],ini_card,end_card,date_info)
+            tasks_that_are_done.put(task)
+            time.sleep(1)
+    return True
+
+def process_date(num_processors,validations_batch_size,date_info):
+    #print(date_info)
+    ini_date=date_info[0]
+    end_date=date_info[1]
+    month=date_info[2]
     # Construct the query
     query = """
-
     SELECT distinct Numero_Tarjeta, count(Fecha_Clearing) as Num_val
     FROM `transmilenio-dwh-shvpc.validaciones.validacion` 
     WHERE (
-        (Fecha_Clearing between '"""+dates[0][0]+"""' and '"""+dates[0][1]+"""') or 
-        (Fecha_Clearing between '"""+dates[1][0]+"""' and '"""+dates[1][1]+"""') or 
-        (Fecha_Clearing between '"""+dates[2][0]+"""' and '"""+dates[2][1]+"""') 
+        (Fecha_Clearing between '"""+ini_date+"""' and '"""+end_date+"""') 
     ) 
+    --AND cast(Numero_Tarjeta as int64) in ( """ + str(1010000002769891) + """, """ +str(1010000002770386)+""")  
+    
     GROUP BY Numero_Tarjeta
     ORDER BY Numero_Tarjeta 
-
     """
-    
+    # Create a instance of bigquery 
+    client = bigquery.Client()
     # API request
     df = client.query(query).to_dataframe(
         dtypes={"Numero_Tarjeta": "int64",
                 "Num_val": "int32"})
     print("Cards gotten!")
-    
-    #Let's create and array of card numbers. Each row 
-    #contains a range of card number which count of validation is about 10M 
 
-    print("Distributing load in bathes of 10M records..")
+    #Let's create and array of card numbers. Each row contains a range of cards numbers.
+    # Count of validations of about validations_batch_size (~5M) Validations
+    print("Distributing validations in batches of "+str(validations_batch_size)+" records..")
     #index_array = []
     card_num_array = []
     ini=0
     end=0
     accum=0
     for row in df.itertuples():
-        if accum > 10000000:
-            #index_array.append((ini, end))
+        if accum > validations_batch_size:
             card_num_array.append((df.iloc[ini]["Numero_Tarjeta"], df.iloc[end]["Numero_Tarjeta"]))
             accum=0
             ini=end
@@ -276,51 +398,145 @@ if __name__ == '__main__':
 
         accum = accum + row.Num_val
         end=end+1
-    #index_array.append((ini, end-1))
     card_num_array.append((df.iloc[ini]["Numero_Tarjeta"], df.iloc[end-1]["Numero_Tarjeta"]))
-    #card_num_array = np.vstack(index_array)
     #print(card_num_array)
     #print(len(card_num_array))
     print("Load distributed!")
+    print(card_num_array)
     
     print("Processing batches of cards...")
     arr_len = len(card_num_array)
-    #arr_len = 2
-    last_trip_id = 0
-    for i in range(arr_len):
-        print("*** Batch "+str(i+1)+" of "+str(arr_len)+" ***")
-        print("Getting cards info. Card's range: ",card_num_array[i][0],card_num_array[i][1])
-        # Construct the query
-        query = """
-        SELECT 
-            A.Numero_Tarjeta as NumeroTarjeta,
-            SUBSTR(Nombre_Perfil , 2, 3) as TipoTarjeta, 
-            A.Valor as Valor,
-            Fecha_Transaccion as Fecha,
-            UNIX_SECONDS(A.Fecha_Transaccion) as Epoch
-        FROM `transmilenio-dwh-shvpc.validaciones.validacion` A 
-        WHERE 
-            (
-                (Fecha_Clearing between '"""+dates[0][0]+"""' and '"""+dates[0][1]+"""') or 
-                (Fecha_Clearing between '"""+dates[1][0]+"""' and '"""+dates[1][1]+"""') or 
-                (Fecha_Clearing between '"""+dates[2][0]+"""' and '"""+dates[2][1]+"""') 
-            )  and 
-            (
-                cast(A.Numero_Tarjeta as int64) >= """ + str(card_num_array[i][0]) + """ and 
-                cast(A.Numero_Tarjeta as int64) < """ + str(card_num_array[i][1]) + """
-            )
-        ORDER BY NumeroTarjeta, Fecha
+#    arr_len = 3
+    
+#     for i in range(arr_len):
+#         print("*** Date Range: "+str(month)+" Batch "+str(i+1)+" of "+str(arr_len)+" ***")
+#         ini_card=card_num_array[i][0]
+#         end_card=card_num_array[i][1]
+#         process_card_batch(i,ini_card,end_card,date_info)
+        
+    # Multiprocessing - taking advantage of all computer processors
+    number_of_task = arr_len
+    number_of_processes = num_processors
+    tasks_to_accomplish = Queue()
+    tasks_that_are_done = Queue()
+    processes = []
+    
+    for i in range(number_of_task):
+        ini_card=card_num_array[i][0]
+        end_card=card_num_array[i][1]
+        #index=i+1
+        elem=(i,number_of_task,ini_card,end_card,date_info)
+        #print(elem)
+        tasks_to_accomplish.put(elem)
 
-        """
-        #print(query)
-        # API request
-        df = client.query(query).to_dataframe(
-            dtypes={"NumeroTarjeta": "int64",
-                    "TipoTarjeta": "int8",
-                    "Valor":"int16",
-                    "Fecha":"datetime64",
-                    "Epoch":"int64"})
-        df["Fecha"]=df["Fecha"].dt.strftime("%Y-%m-%d %H:%M:%S")
-        print("Info received! Starting processing...")
-        last_trip_id = process_query(df,i,num_processors,last_trip_id)
-    print("All Done!")
+    # creating processes
+    for w in range(number_of_processes):
+        p = Process(target=do_job, args=(tasks_to_accomplish, tasks_that_are_done))
+        processes.append(p)
+        p.start()
+
+    # completing process
+    for p in processes:
+        p.join()
+
+    # print the output
+    print("Batches that are done:")
+    while not tasks_that_are_done.empty():
+        print(tasks_that_are_done.get())
+    
+    # Consolidating
+    print("Consolidating sub-results by month...")
+    start_time = time.time()
+    
+    final_details        = pd.DataFrame()
+    final_viajes         = pd.DataFrame()
+    final_infotarjetadia = pd.DataFrame()
+    final_infotarjetames = pd.DataFrame()
+    offset_id_viaje_1 = 0
+    offset_id_viaje_2 = 0
+    for i in range(number_of_task):
+        # Details
+        filename="detalles_"+str(month)+"_"+str('{:02d}'.format(i+1))+".csv".zfill(3)
+        print(filename)
+        df = pd.read_csv(filename)
+        if(i == 0):
+            offset_id_viaje_1 = df['Viaje_id'].iloc[-1] 
+            final_details = pd.concat([final_details, df],ignore_index=True)
+        else:
+            df['Viaje_id'] = df['Viaje_id'] + offset_id_viaje_1
+            final_details = pd.concat([final_details, df], ignore_index=True)
+        os.popen("rm "+filename)
+        
+        # Viajes
+        filename="viajes_"+str(month)+"_"+str('{:02d}'.format(i+1))+".csv".zfill(3)
+        print(filename)
+        df = pd.read_csv(filename)
+        if(i == 0):
+            offset_id_viaje_2 = df['Viaje_id'].iloc[-1] 
+            final_viajes = pd.concat([final_viajes, df],ignore_index=True)
+        else:
+            df['Viaje_id'] = df['Viaje_id'] + offset_id_viaje_2
+            final_viajes = pd.concat([final_viajes, df], ignore_index=True)
+        os.popen("rm "+filename)
+        
+        # Info_tarjeta_dia
+        filename="info_tarjeta_dia_"+str(month)+"_"+str('{:02d}'.format(i+1))+".csv".zfill(3)
+        print(filename)
+        df = pd.read_csv(filename)
+        final_infotarjetadia = pd.concat([final_infotarjetadia, df],ignore_index=True)
+        os.popen("rm "+filename)
+
+        # Info_tarjeta_mes
+        filename="info_tarjeta_mes_"+str(month)+"_"+str('{:02d}'.format(i+1))+".csv".zfill(3)
+        print(filename)
+        df = pd.read_csv(filename)
+        final_infotarjetames = pd.concat([final_infotarjetames, df],ignore_index=True)
+        os.popen("rm "+filename)
+
+    #print(final_details)
+    #print(final_viajes)
+    #print(final_infotarjetadia)
+    #print(final_infotarjetames)
+
+    filename="detalles_"+str(month)+".csv"
+    print("Saving Final "+filename)
+    final_details.to_csv(filename,index=False)
+
+    filename="viajes_"+str(month)+".csv"
+    print("Saving Final "+filename)
+    final_viajes.to_csv(filename,index=False)
+
+    filename="info_tarjeta_dia_"+str(month)+".csv"
+    print("Saving Final "+filename)
+    final_infotarjetadia.to_csv(filename,index=False)
+    
+    filename="info_tarjeta_mes_"+str(month)+".csv"
+    print("Saving Final "+filename)
+    final_infotarjetames.to_csv(filename,index=False)
+
+    print('Files Consolidated! --- %s seconds ---' % (time.time() - start_time))
+    
+    #last_trip_id = 0
+if __name__ == '__main__':
+    total_start_time = time.time()
+    num_processors=multiprocessing.cpu_count()
+    validations_batch_size=2000000
+    os.popen("rm *.csv")
+
+    print("Getting trips info (count of validations for each card) ...")
+    dates=[
+        ['2019-09-01','2019-09-30','2019-09',1567295999,1569887999,95,3],
+        ['2020-02-01','2020-02-29','2020-02',1580515199,1583020799,95,3],
+        ['2020-10-01','2020-10-31','2020-10',1601510399,1604188799,110,4],
+        
+#         ['2019-09-01','2019-09-03','2019-09',1567295999,1569887999,95,3],
+#         ['2020-02-01','2020-02-03','2020-02',1580515199,1583020799,95,3],
+#         ['2020-10-01','2020-10-03','2020-10',1601510399,1604188799,110,4],
+    ]
+    
+    for date_info in dates:
+        process_date(num_processors,validations_batch_size,date_info)
+    print("*** All Done! *** --- %s seconds ---" % (time.time() - total_start_time))
+    
+    
+
