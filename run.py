@@ -137,7 +137,6 @@ def calc_viajes_wrapper(num_proc,df_arr,last_trip_id,ini_epoch,end_epoch,minutes
             
 
     return result_arr
-
 def process_query(df,query_index,num_processors,last_trip_id,date_info):
 
     ini_date=date_info[0]
@@ -282,37 +281,6 @@ def do_job_1(tasks_to_accomplish, tasks_that_are_done):
             #time.sleep(1)
     return True
 
-def do_job_2(tasks_to_accomplish, tasks_that_are_done):
-    while True:
-        try:
-            #try to get task from the queue. get_nowait() function will 
-            #raise queue.Empty exception if the queue is empty. 
-            #queue(False) function would do the same task also.
-            task = tasks_to_accomplish.get_nowait()
-            
-        except queue.Empty:
-
-            break
-        else:
-            #if no exception has been raised, add the task completion 
-            #message to task_that_are_done queue
-            #print(task)
-            index=task[0]
-            num_batches = task[1]
-            df = task[2]
-            filename = task[3]
-            month = task[4]
-            
-            print(current_process().name+" Saving file "+str(filename)+" / "+str(index)+" of "+str(num_batches)+ "\n")
-            # Call the function that gets details, viajes, dia and mes
-
-            file_name=filename+str(month)+".csv"
-            df.to_csv(file_name,index=False)
-            
-            tasks_that_are_done.put(index)
-            #time.sleep(1)
-    return True
-
 def process_date(num_processors,validations_batch_size,date_info):
     #print(date_info)
     ini_date=date_info[0]
@@ -402,7 +370,7 @@ def process_date(num_processors,validations_batch_size,date_info):
     print("Consolidating detalles ...")
     
     offset_id_viaje = 0
-    final_details = pd.DataFrame()
+    df_details = pd.DataFrame()
     files_detalles_str=""
     for i in range(number_of_task):
         i=i+1
@@ -414,14 +382,15 @@ def process_date(num_processors,validations_batch_size,date_info):
             offset_id_viaje = df['Viaje_id'].iloc[-1] 
         else:
             df['Viaje_id'] = df['Viaje_id'] + offset_id_viaje
-        final_details = pd.concat([final_details, df],ignore_index=True)
+            offset_id_viaje = df['Viaje_id'].iloc[-1]
+        df_details = pd.concat([df_details, df],ignore_index=True)
         files_detalles_str = files_detalles_str + filename + " "
     del df
     gc.collect()
     
     print("Calculating viajes...")
     # Group by - por tarjeta, fecha y viaje (agrupa a nivel de viaje). Deja el último de tarjeta que aparezca en el viaje
-    df_viajes = final_details.groupby(['NumeroTarjeta','mes','dia','Viaje_id']).agg(
+    df_viajes = df_details.groupby(['NumeroTarjeta','mes','dia','Viaje_id']).agg(
             tipo_tarjeta=pd.NamedAgg(column='TipoTarjeta', aggfunc='last'),
             valor=pd.NamedAgg(column='Valor', aggfunc=np.nansum),
             validaciones = pd.NamedAgg(column='NumeroTarjeta', aggfunc='size')).reset_index()
@@ -453,34 +422,9 @@ def process_date(num_processors,validations_batch_size,date_info):
 
     print("Saving Final CSV Files...")
     
-#     elem=(1,4,final_details,"detalles_",month)
-#     tasks_to_accomplish.put(elem)
-#     elem=(2,4,df_viajes,"viajes_",month)
-#     tasks_to_accomplish.put(elem)
-#     elem=(3,4,df_itd,"info_tarjeta_dia_",month)
-#     tasks_to_accomplish.put(elem)
-#     elem=(4,4,df_itm,"info_tarjeta_mes_",month)
-#     tasks_to_accomplish.put(elem)
-    
-#     # creating processes
-#     for w in range(number_of_processes):
-# #         p = Process(target=do_job_2, args=(tasks_to_accomplish, tasks_that_are_done))
-#         p = threading.Thread(target=do_job_2, args=(tasks_to_accomplish, tasks_that_are_done))
-#         processes.append(p)
-#         p.start()
-
-#     # completing process
-#     for p in processes:
-#         p.join()
-
-#     # print the output
-#     print("Consolidated batches that are done:")
-#     while not tasks_that_are_done.empty():
-#         print(tasks_that_are_done.get())
-    
     filename="detalles_"+str(month)+".csv"
     print("Saving file "+filename+"...")
-    final_details.to_csv(filename,index=False)
+    df_details.to_csv(filename,index=False)
     
     filename="viajes_"+str(month)+".csv"
     print("Saving file "+filename+"...")
@@ -544,3 +488,4 @@ if __name__ == '__main__':
         process_date(num_processors,validations_batch_size,date_info)
         print("* Date " +date_info[2]+" Finished! * --- %s seconds ---" % (time.time() - date_start_time))
     print("*** All Done! *** --- %s seconds ---" % (time.time() - total_start_time))
+    
