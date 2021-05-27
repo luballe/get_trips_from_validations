@@ -176,7 +176,9 @@ def process_query(np_arr,id_batch,num_processors,date_info):
     np_arr_copy = np.roll(np_arr_copy, 1,axis=0)
 #     print(np_arr_copy)
     # Concatenate the copied array to the right of the original one (just with the card number (column 0) and epoch (column 3))
-    np_arr_tmp = np.concatenate((np_arr[:,[0,1,2,3]], np_arr_copy), axis=1)
+    #np_arr_tmp = np.concatenate((np_arr[:,[0,1,2,3]], np_arr_copy), axis=1)
+    np_arr_tmp = np.concatenate((np_arr_copy,np_arr[:,[0,1,2,3]]), axis=1)
+    
     del np_arr_copy
     gc.collect()
 #     print(np_arr_tmp)
